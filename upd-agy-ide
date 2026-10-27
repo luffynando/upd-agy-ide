@@ -306,3 +306,88 @@ if command -v gtk-update-icon-cache >/dev/null 2>&1; then
 fi
 
 printf 'Installed Antigravity IDE %s at %s\n' "$version" "$resolved_install_root/$install_dir"
+
+# Configuración del CLI y alias 'agy-ide' según el tipo de shell (bash | zsh | fish)
+cli_binary="$resolved_install_root/$install_dir/bin/antigravity-ide"
+if [ ! -x "$cli_binary" ]; then
+	cli_binary="$command_link"
+fi
+
+# Creamos un enlace en /usr/local/bin para que 'agy-ide' esté disponible globalmente en PATH como comando
+ln -sfn "$cli_binary" /usr/local/bin/agy-ide
+
+target_user="${SUDO_USER:-$USER}"
+target_home=$(getent passwd "$target_user" 2>/dev/null | cut -d: -f6 || true)
+if [ -z "$target_home" ] || [ ! -d "$target_home" ]; then
+	target_home="${HOME:-/root}"
+fi
+
+target_shell=$(getent passwd "$target_user" 2>/dev/null | cut -d: -f7 || echo "${SHELL:-}")
+target_shell_name=$(basename "${target_shell:-}")
+
+detected_shell=""
+config_file=""
+
+case "$target_shell_name" in
+*zsh*)
+	detected_shell="zsh"
+	config_file="$target_home/.zshrc"
+	;;
+*fish*)
+	detected_shell="fish"
+	config_file="$target_home/.config/fish/config.fish"
+	;;
+*bash*)
+	detected_shell="bash"
+	config_file="$target_home/.bashrc"
+	;;
+*)
+	case "$(basename "${SHELL:-}")" in
+	*zsh*)
+		detected_shell="zsh"
+		config_file="$target_home/.zshrc"
+		;;
+	*fish*)
+		detected_shell="fish"
+		config_file="$target_home/.config/fish/config.fish"
+		;;
+	*bash*)
+		detected_shell="bash"
+		config_file="$target_home/.bashrc"
+		;;
+	*)
+		if [ -f "$target_home/.zshrc" ]; then
+			detected_shell="zsh"
+			config_file="$target_home/.zshrc"
+		elif [ -d "$target_home/.config/fish" ] || [ -f "$target_home/.config/fish/config.fish" ]; then
+			detected_shell="fish"
+			config_file="$target_home/.config/fish/config.fish"
+		else
+			detected_shell="bash"
+			config_file="$target_home/.bashrc"
+		fi
+		;;
+	esac
+	;;
+esac
+
+alias_line="alias agy-ide='$cli_binary'"
+
+if [ -n "$config_file" ]; then
+	mkdir -p "$(dirname "$config_file")"
+	if [ -f "$config_file" ] && grep -q "alias agy-ide=" "$config_file"; then
+		sed -i "s|^alias agy-ide=.*|$alias_line|" "$config_file"
+	else
+		printf '\n# Alias para Antigravity IDE (funciona exactamente como "code")\n%s\n' "$alias_line" >>"$config_file"
+	fi
+
+	if [ -n "${SUDO_USER:-}" ] && [ "$target_user" != "root" ]; then
+		target_group=$(id -gn "$target_user" 2>/dev/null || id -g "$target_user")
+		chown "$target_user:$target_group" "$config_file"
+		if [ "$detected_shell" = "fish" ] && [ -d "$target_home/.config/fish" ]; then
+			chown -R "$target_user:$target_group" "$target_home/.config/fish"
+		fi
+	fi
+
+	printf 'Configured alias "agy-ide" for %s in %s\n' "$detected_shell" "$config_file"
+fi
