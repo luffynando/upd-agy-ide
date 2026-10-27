@@ -25,7 +25,62 @@ aarch64 | arm64) platform="linux-arm" ;;
 	;;
 esac
 
-# En Ubuntu 24.04 curl no siempre viene preinstalado por defecto
+# -------------------------------------------------------------
+# Detección e identificación del sistema operativo
+# Soporte para: Ubuntu 22.04, Ubuntu 24.04, Ubuntu 26.04, Debian 12, Debian 13 y derivados
+# -------------------------------------------------------------
+os_id="unknown"
+os_version_id=""
+os_codename=""
+os_pretty="Linux"
+has_t64=no
+needs_apparmor=no
+
+if [ -f /etc/os-release ]; then
+	# shellcheck source=/dev/null
+	. /etc/os-release
+	os_id="${ID:-unknown}"
+	os_version_id="${VERSION_ID:-}"
+	os_codename="${VERSION_CODENAME:-}"
+	os_pretty="${PRETTY_NAME:-$os_id}"
+fi
+
+# Determinamos si el sistema requiere librerías con transición t64 (Ubuntu 24.04+, Ubuntu 26.04, Debian 13+)
+# o bibliotecas sin sufijo t64 (Ubuntu 22.04, Debian 12)
+case "$os_id" in
+ubuntu)
+	major_ver=$(echo "$os_version_id" | cut -d. -f1)
+	if [ -n "$major_ver" ] && [ "$major_ver" -ge 24 ] 2>/dev/null; then
+		has_t64=yes
+	fi
+	;;
+debian)
+	major_ver=$(echo "$os_version_id" | cut -d. -f1)
+	if [ -n "$major_ver" ] && [ "$major_ver" -ge 13 ] 2>/dev/null; then
+		has_t64=yes
+	elif [ "$os_codename" = "trixie" ] || [ "$os_codename" = "sid" ] || [ "$os_codename" = "forky" ]; then
+		has_t64=yes
+	fi
+	;;
+*)
+	# Detección para distribuciones derivadas (Linux Mint, Pop!_OS, etc.)
+	if command -v apt-cache >/dev/null 2>&1 && apt-cache show libgtk-3-0t64 >/dev/null 2>&1; then
+		has_t64=yes
+	fi
+	;;
+esac
+
+# Verificamos si AppArmor restringe userns no privilegiados (Ubuntu 24.04+, Ubuntu 26.04, Debian con restricción)
+if [ -d /etc/apparmor.d ]; then
+	if [ -f /etc/apparmor.d/abi/4.0 ] || [ "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || echo 0)" = "1" ]; then
+		needs_apparmor=yes
+	fi
+fi
+
+printf 'Sistema operativo detectado: %s (ID: %s, Versión: %s, Codename: %s)\n' \
+	"$os_pretty" "$os_id" "${os_version_id:-N/A}" "${os_codename:-N/A}"
+
+# En algunas instalaciones mínimas (ej. Debian 12/13, Ubuntu minimal) herramientas básicas pueden faltar
 missing_cmds=()
 for required_command in curl tar python3; do
 	if ! command -v "$required_command" >/dev/null 2>&1; then
@@ -166,8 +221,8 @@ if [ -f "$desktop_file" ] &&
 	desktop_matches=yes
 fi
 
-# En Ubuntu 24.04 AppArmor restringe userns no privilegiados; verificamos perfil si aplica
-if [ -d /etc/apparmor.d ] && [ -f /etc/apparmor.d/abi/4.0 ]; then
+# Verificamos perfil de AppArmor si el sistema restringe userns no privilegiados
+if [ "$needs_apparmor" = yes ]; then
 	if [ ! -f "$apparmor_file" ] || ! grep -Fq "$expected_target" "$apparmor_file"; then
 		apparmor_matches=no
 	fi
@@ -207,35 +262,62 @@ if [ ! -f "$icon_source" ]; then
 	exit 1
 fi
 
-# En Ubuntu 24.04 (transición t64) verificamos si faltan librerías compartidas para Electron
+# Verificamos si faltan librerías compartidas para Electron según la distribución detectada
 if command -v ldd >/dev/null 2>&1 && command -v apt-get >/dev/null 2>&1; then
 	if ldd "$tmpdir/$archive_top_dir/antigravity-ide" 2>/dev/null | grep -q "not found"; then
-		echo "Installing missing system libraries for Ubuntu 24.04..."
+		echo "Installing missing system libraries for $os_pretty..."
 		export DEBIAN_FRONTEND=noninteractive
 		apt-get update -qq
-		apt-get install -y -qq --no-install-recommends \
-			libasound2t64 \
-			libatk-bridge2.0-0t64 \
-			libatk1.0-0t64 \
-			libatspi2.0-0t64 \
-			libcairo2 \
-			libcups2t64 \
-			libdbus-1-3 \
-			libdrm2 \
-			libgbm1 \
-			libglib2.0-0t64 \
-			libgtk-3-0t64 \
-			libnspr4 \
-			libnss3 \
-			libpango-1.0-0 \
-			libx11-6 \
-			libxcb1 \
-			libxcomposite1 \
-			libxdamage1 \
-			libxext6 \
-			libxfixes3 \
-			libxkbcommon0 \
-			libxrandr2 || true
+
+		if [ "$has_t64" = yes ]; then
+			apt-get install -y -qq --no-install-recommends \
+				libasound2t64 \
+				libatk-bridge2.0-0t64 \
+				libatk1.0-0t64 \
+				libatspi2.0-0t64 \
+				libcairo2 \
+				libcups2t64 \
+				libdbus-1-3 \
+				libdrm2 \
+				libgbm1 \
+				libglib2.0-0t64 \
+				libgtk-3-0t64 \
+				libnspr4 \
+				libnss3 \
+				libpango-1.0-0 \
+				libx11-6 \
+				libxcb1 \
+				libxcomposite1 \
+				libxdamage1 \
+				libxext6 \
+				libxfixes3 \
+				libxkbcommon0 \
+				libxrandr2 || true
+		else
+			apt-get install -y -qq --no-install-recommends \
+				libasound2 \
+				libatk-bridge2.0-0 \
+				libatk1.0-0 \
+				libatspi2.0-0 \
+				libcairo2 \
+				libcups2 \
+				libdbus-1-3 \
+				libdrm2 \
+				libgbm1 \
+				libglib2.0-0 \
+				libgtk-3-0 \
+				libnspr4 \
+				libnss3 \
+				libpango-1.0-0 \
+				libx11-6 \
+				libxcb1 \
+				libxcomposite1 \
+				libxdamage1 \
+				libxext6 \
+				libxfixes3 \
+				libxkbcommon0 \
+				libxrandr2 || true
+		fi
 	fi
 fi
 
@@ -259,13 +341,18 @@ real_binary="$resolved_install_root/$install_dir/antigravity-ide"
 
 ln -sfn "$real_binary" "$command_link"
 
-# Configuración de AppArmor para Ubuntu 24.04+ (permite userns para el sandbox de Chromium/Electron)
-if [ -d /etc/apparmor.d ] && [ -f /etc/apparmor.d/abi/4.0 ]; then
+# Configuración de AppArmor si aplica (Ubuntu 24.04, Ubuntu 26.04 o Debian con restricción de userns)
+if [ "$needs_apparmor" = yes ]; then
+	abi_directive=""
+	if [ -f /etc/apparmor.d/abi/4.0 ]; then
+		abi_directive="abi <abi/4.0>,"
+	fi
+
 	tee "$apparmor_file" >/dev/null <<APPARMOR
 # This profile allows everything and only exists to give the
 # application a name instead of having the label "unconfined"
 
-abi <abi/4.0>,
+$abi_directive
 include <tunables/global>
 
 profile antigravity-ide $real_binary flags=(unconfined) {
