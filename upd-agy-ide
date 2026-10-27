@@ -1,0 +1,308 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ "$(id -u)" -ne 0 ]; then
+	echo "Run with sudo: sudo $(basename "$0")" >&2
+	exit 1
+fi
+
+download_page="https://antigravity.google/releases"
+fallback_api_url="https://antigravity-ide-auto-updater-974169037036.us-central1.run.app/releases"
+install_root="/opt/antigravity-ide"
+command_link="/usr/local/bin/antigravity-ide"
+desktop_file="/usr/share/applications/antigravity-ide.desktop"
+icon_file="/usr/share/icons/hicolor/512x512/apps/antigravity-ide.png"
+apparmor_file="/etc/apparmor.d/antigravity-ide"
+archive_top_dir="Antigravity IDE"
+install_dir="Antigravity-IDE"
+
+case "$(uname -m)" in
+x86_64 | amd64) platform="linux-x64" ;;
+aarch64 | arm64) platform="linux-arm" ;;
+*)
+	echo "Unsupported architecture: $(uname -m)" >&2
+	exit 1
+	;;
+esac
+
+# En Ubuntu 24.04 curl no siempre viene preinstalado por defecto
+missing_cmds=()
+for required_command in curl tar python3; do
+	if ! command -v "$required_command" >/dev/null 2>&1; then
+		missing_cmds+=("$required_command")
+	fi
+done
+
+if [ "${#missing_cmds[@]}" -gt 0 ]; then
+	if command -v apt-get >/dev/null 2>&1; then
+		echo "Installing required tools (${missing_cmds[*]})..."
+		export DEBIAN_FRONTEND=noninteractive
+		apt-get update -qq
+		apt-get install -y -qq --no-install-recommends ca-certificates "${missing_cmds[@]}"
+	else
+		echo "Missing required commands: ${missing_cmds[*]}" >&2
+		exit 1
+	fi
+fi
+
+if [ -L "$command_link" ]; then
+	command_target=$(readlink -f "$command_link" || true)
+	# Resolvemos también los enlaces simbólicos de la ruta de instalación
+	resolved_install_root=$(readlink -f "$install_root" || echo "$install_root")
+
+	case "$command_target" in
+	"$resolved_install_root"/* | "$install_root"/*) ;;
+	*)
+		echo "$command_link points to $command_target. Move it before rerunning this helper." >&2
+		exit 1
+		;;
+	esac
+elif [ -e "$command_link" ]; then
+	echo "$command_link exists and is not a symlink. Move it before rerunning this helper." >&2
+	exit 1
+fi
+
+tmp_parent="${TMPDIR:-/var/tmp}"
+mkdir -p "$tmp_parent"
+tmpdir=$(mktemp -d "$tmp_parent/antigravity-ide.XXXXXX")
+trap 'rm -rf "$tmpdir"' EXIT
+download_html="$tmpdir/download.html"
+archive="$tmpdir/Antigravity-IDE.tar.gz"
+archive_list="$tmpdir/archive-list.txt"
+
+curl -fsSL --compressed --retry 3 -o "$download_html" "$download_page" || true
+
+download_fields=$(
+	python3 - "$download_html" "$download_page" "$platform" "$fallback_api_url" <<'PY'
+import json
+import re
+import sys
+import urllib.request
+from pathlib import Path
+from urllib.parse import urljoin
+
+html_path = Path(sys.argv[1])
+page_url = sys.argv[2]
+platform = sys.argv[3]
+fallback_api_url = sys.argv[4]
+
+html = html_path.read_text(errors="replace") if html_path.is_file() else ""
+
+base_match = re.search(r'<base\s+href="([^"]+)"', html)
+base_url = urljoin(page_url, base_match.group(1)) if base_match else page_url
+
+api_pattern = re.compile(r'https://antigravity-ide-auto-updater[a-zA-Z0-9.-]*/releases')
+api_url = None
+
+# 1. Check if the API URL is directly in the HTML
+direct_match = api_pattern.search(html)
+if direct_match:
+    api_url = direct_match.group(0)
+
+# 2. Scan JS bundles referenced in the page (in reverse order, as main page scripts load last)
+if not api_url and html:
+    js_matches = re.findall(r'(?:src|href)="([^"]*\.js)"', html)
+    seen = set()
+    for js_rel in reversed(js_matches):
+        js_url = urljoin(base_url, js_rel)
+        if js_url in seen:
+            continue
+        seen.add(js_url)
+        try:
+            req = urllib.request.Request(js_url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                bundle = resp.read().decode("utf-8", errors="replace")
+            m = api_pattern.search(bundle)
+            if m:
+                api_url = m.group(0)
+                break
+        except Exception:
+            continue
+
+# 3. Fallback to known auto-updater endpoint
+if not api_url:
+    api_url = fallback_api_url
+
+try:
+    req = urllib.request.Request(api_url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=15) as response:
+        releases = json.loads(response.read().decode("utf-8"))
+except Exception as e:
+    raise SystemExit(f"Failed to fetch releases from API ({api_url}): {e}")
+
+if not releases or not isinstance(releases, list):
+    raise SystemExit("Invalid releases format received from API")
+
+latest = releases[0]
+version = latest.get("version")
+exec_id = latest.get("execution_id")
+
+if not version or not exec_id:
+    raise SystemExit("Latest release missing version or execution_id")
+
+url = f"https://edgedl.me.gvt1.com/edgedl/release2/j0qc3/antigravity/stable/{version}-{exec_id}/{platform}/Antigravity%20IDE.tar.gz"
+print(version, url)
+PY
+)
+read -r version download_url <<<"$download_fields"
+
+if [ -z "$version" ] || [ -z "$download_url" ]; then
+	echo "Could not parse the Antigravity IDE download page." >&2
+	exit 1
+fi
+
+# Resolvemos la ruta base real para evitar conflictos con enlaces simbólicos
+resolved_install_root=$(readlink -f "$install_root" || echo "$install_root")
+
+expected_target="$resolved_install_root/$install_dir/antigravity-ide"
+sandbox_path="$resolved_install_root/$install_dir/chrome-sandbox"
+installed_version=$(cat "$resolved_install_root/.linuxcapable-version" 2>/dev/null || true)
+desktop_matches=no
+apparmor_matches=yes
+
+if [ -f "$desktop_file" ] &&
+	grep -q '^Icon=antigravity-ide$' "$desktop_file" &&
+	grep -q '^StartupWMClass=antigravity-ide$' "$desktop_file"; then
+	desktop_matches=yes
+fi
+
+# En Ubuntu 24.04 AppArmor restringe userns no privilegiados; verificamos perfil si aplica
+if [ -d /etc/apparmor.d ] && [ -f /etc/apparmor.d/abi/4.0 ]; then
+	if [ ! -f "$apparmor_file" ] || ! grep -Fq "$expected_target" "$apparmor_file"; then
+		apparmor_matches=no
+	fi
+fi
+
+if [ "$installed_version" = "$version" ] &&
+	[ -x "$expected_target" ] &&
+	[ -L "$command_link" ] &&
+	[ "$(readlink -f "$command_link")" = "$expected_target" ] &&
+	[ "$desktop_matches" = yes ] &&
+	[ "$apparmor_matches" = yes ] &&
+	[ -f "$icon_file" ]; then
+	if [ ! -e "$sandbox_path" ] || [ "$(stat -c '%U:%G:%a' "$sandbox_path")" = "root:root:4755" ]; then
+		printf 'Antigravity IDE %s is already installed at %s\n' "$version" "$resolved_install_root/$install_dir"
+		exit 0
+	fi
+fi
+
+printf 'Downloading Antigravity IDE %s for %s...\n' "$version" "$platform"
+curl -fsSL --retry 3 -o "$archive" "$download_url"
+tar -tzf "$archive" >"$archive_list"
+top_dir=$(sed -n '1{s#/.*##;p;q}' "$archive_list")
+if [ "$top_dir" != "$archive_top_dir" ]; then
+	echo "Unexpected archive directory: $top_dir" >&2
+	exit 1
+fi
+
+tar -xzf "$archive" -C "$tmpdir"
+if [ ! -x "$tmpdir/$archive_top_dir/antigravity-ide" ]; then
+	echo "The Antigravity IDE launcher was not found in the archive." >&2
+	exit 1
+fi
+
+icon_source="$tmpdir/$archive_top_dir/resources/app/resources/linux/code.png"
+if [ ! -f "$icon_source" ]; then
+	echo "The Antigravity IDE icon was not found in the archive." >&2
+	exit 1
+fi
+
+# En Ubuntu 24.04 (transición t64) verificamos si faltan librerías compartidas para Electron
+if command -v ldd >/dev/null 2>&1 && command -v apt-get >/dev/null 2>&1; then
+	if ldd "$tmpdir/$archive_top_dir/antigravity-ide" 2>/dev/null | grep -q "not found"; then
+		echo "Installing missing system libraries for Ubuntu 24.04..."
+		export DEBIAN_FRONTEND=noninteractive
+		apt-get update -qq
+		apt-get install -y -qq --no-install-recommends \
+			libasound2t64 \
+			libatk-bridge2.0-0t64 \
+			libatk1.0-0t64 \
+			libatspi2.0-0t64 \
+			libcairo2 \
+			libcups2t64 \
+			libdbus-1-3 \
+			libdrm2 \
+			libgbm1 \
+			libglib2.0-0t64 \
+			libgtk-3-0t64 \
+			libnspr4 \
+			libnss3 \
+			libpango-1.0-0 \
+			libx11-6 \
+			libxcb1 \
+			libxcomposite1 \
+			libxdamage1 \
+			libxext6 \
+			libxfixes3 \
+			libxkbcommon0 \
+			libxrandr2 || true
+	fi
+fi
+
+rm -rf "${install_root}.new"
+mkdir -p "${install_root}.new/$install_dir"
+cp -a "$tmpdir/$archive_top_dir/." "${install_root}.new/$install_dir/"
+printf '%s\n' "$version" >"${install_root}.new/.linuxcapable-version"
+if [ -f "${install_root}.new/$install_dir/chrome-sandbox" ]; then
+	chown root:root "${install_root}.new/$install_dir/chrome-sandbox"
+	chmod 4755 "${install_root}.new/$install_dir/chrome-sandbox"
+fi
+if [ -d "$install_root" ]; then
+	rm -rf "${install_root}.previous"
+	mv "$install_root" "${install_root}.previous"
+fi
+mv "${install_root}.new" "$install_root"
+
+# Actualizamos la ruta real una vez movido el directorio
+resolved_install_root=$(readlink -f "$install_root" || echo "$install_root")
+real_binary="$resolved_install_root/$install_dir/antigravity-ide"
+
+ln -sfn "$real_binary" "$command_link"
+
+# Configuración de AppArmor para Ubuntu 24.04+ (permite userns para el sandbox de Chromium/Electron)
+if [ -d /etc/apparmor.d ] && [ -f /etc/apparmor.d/abi/4.0 ]; then
+	tee "$apparmor_file" >/dev/null <<APPARMOR
+# This profile allows everything and only exists to give the
+# application a name instead of having the label "unconfined"
+
+abi <abi/4.0>,
+include <tunables/global>
+
+profile antigravity-ide $real_binary flags=(unconfined) {
+  userns,
+
+  # Site-specific additions and overrides. See local/README for details.
+  include if exists <local/antigravity-ide>
+}
+APPARMOR
+	if command -v apparmor_parser >/dev/null 2>&1; then
+		apparmor_parser -r "$apparmor_file" >/dev/null 2>&1 || true
+	fi
+fi
+
+mkdir -p "$(dirname "$icon_file")"
+install -m 0644 "$icon_source" "$icon_file"
+
+tee "$desktop_file" >/dev/null <<DESKTOP
+[Desktop Entry]
+Name=Antigravity IDE
+Comment=Google Antigravity IDE
+Exec=$command_link %U
+Icon=antigravity-ide
+Terminal=false
+Type=Application
+Categories=Development;IDE;
+MimeType=x-scheme-handler/antigravity-ide;application/x-antigravity-workspace;
+StartupNotify=true
+StartupWMClass=antigravity-ide
+DESKTOP
+
+if command -v update-desktop-database >/dev/null 2>&1; then
+	update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+fi
+
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+	gtk-update-icon-cache -q /usr/share/icons/hicolor 2>/dev/null || true
+fi
+
+printf 'Installed Antigravity IDE %s at %s\n' "$version" "$resolved_install_root/$install_dir"
