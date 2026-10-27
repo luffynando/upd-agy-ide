@@ -32,15 +32,30 @@ Script automatizado en Bash para instalar, actualizar y configurar **Antigravity
 
 ## 🛠️ Instalación y Uso
 
-### 1. Dar permisos de ejecución
+### 1. Obtener el script desde el repositorio
 
-Si acabas de clonar o descargar el script, asegúrate de otorgarle permisos de ejecución:
+Puedes clonar el repositorio con `git`:
+
+```bash
+git clone https://github.com/luffynando/upd-agy-ide.git
+cd upd-agy-ide
+```
+
+O descargar únicamente el script directamente con `curl` (o `wget`):
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/luffynando/upd-agy-ide/main/upd-agy-ide
+```
+
+### 2. Dar permisos de ejecución
+
+Asegúrate de otorgarle permisos de ejecución al archivo:
 
 ```bash
 chmod +x upd-agy-ide
 ```
 
-### 2. Ejecutar el script
+### 3. Ejecutar el script
 
 Ejecuta el script con `sudo`:
 
@@ -50,7 +65,7 @@ sudo ./upd-agy-ide
 
 > **Nota**: El script requiere privilegios `root` para instalar los binarios en `/opt`, configurar enlaces en `/usr/local/bin` y generar los accesos directos del sistema.
 
-### 3. (Opcional) Hacer el comando global en el sistema
+### 4. (Opcional) Hacer el comando global en el sistema
 
 Para poder actualizar Antigravity IDE en cualquier momento desde cualquier carpeta de tu terminal:
 
