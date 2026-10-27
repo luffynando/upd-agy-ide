@@ -19,6 +19,9 @@ Script automatizado en Bash para instalar, actualizar y configurar **Antigravity
 - **Comando CLI y Alias `agy-ide` (idéntico a `code`)**:
   - Vincula el ejecutable CLI `/usr/local/bin/agy-ide` al lanzador interno (`bin/antigravity-ide`).
   - Detecta el shell del usuario (**Bash**, **Zsh** o **Fish**) e inyecta de manera limpia e idempotente el alias `agy-ide` en `~/.bashrc`, `~/.zshrc` o `~/.config/fish/config.fish`, preservando la propiedad y permisos del usuario real (no de root).
+- **Migración opcional de extensiones desde VS Code (`--with-extensions`)**:
+  - Al pasar el flag `--with-extensions`, si detecta Visual Studio Code instalado (vía APT, Snap o Flatpak) o el directorio `~/.vscode/extensions`, compara las extensiones instaladas con las de Antigravity IDE (`~/.antigravity-ide/extensions`).
+  - Migra las extensiones faltantes instalándolas mediante el CLI de Antigravity IDE (con respaldo de copia directa desde `~/.vscode/extensions` si alguna extensión no está en Open VSX). Si no se pasa el flag, no realiza búsqueda ni instalación de extensiones.
 
 ---
 
@@ -63,6 +66,12 @@ Ejecuta el script con `sudo`:
 sudo ./upd-agy-ide
 ```
 
+Si deseas que además busque e instale/migre tus extensiones de VS Code hacia Antigravity IDE, agrega el flag `--with-extensions`:
+
+```bash
+sudo ./upd-agy-ide --with-extensions
+```
+
 > **Nota**: El script requiere privilegios `root` para instalar los binarios en `/opt`, configurar enlaces en `/usr/local/bin` y generar los accesos directos del sistema.
 
 ### 4. (Opcional) Hacer el comando global en el sistema
@@ -77,6 +86,8 @@ A partir de ese momento, solo necesitarás ejecutar:
 
 ```bash
 sudo upd-agy-ide
+# o incluyendo la migración de extensiones de VS Code:
+sudo upd-agy-ide --with-extensions
 ```
 
 ---
