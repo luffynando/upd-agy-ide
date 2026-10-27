@@ -35,60 +35,39 @@ Script automatizado en Bash para instalar, actualizar y configurar **Antigravity
 
 ## 🛠️ Instalación y Uso
 
-### 1. Obtener el script desde el repositorio
+### 1. Instalar `upd-agy-ide` como comando global
 
-Puedes clonar el repositorio con `git`:
+Descarga el script directamente en `/usr/local/bin` y otórgale permisos de ejecución con un solo comando:
+
+```bash
+sudo curl -fsSL https://raw.githubusercontent.com/luffynando/upd-agy-ide/main/upd-agy-ide -o /usr/local/bin/upd-agy-ide && sudo chmod +x /usr/local/bin/upd-agy-ide
+```
+
+<details>
+<summary>Alternativa: Clonar el repositorio con <code>git</code></summary>
 
 ```bash
 git clone https://github.com/luffynando/upd-agy-ide.git
 cd upd-agy-ide
+sudo install -m 0755 upd-agy-ide /usr/local/bin/upd-agy-ide
 ```
+</details>
 
-O descargar únicamente el script directamente con `curl` (o `wget`):
+### 2. Ejecutar el instalador / actualizador
+
+Una vez instalado el comando global, puedes ejecutarlo desde cualquier carpeta de tu terminal:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/luffynando/upd-agy-ide/main/upd-agy-ide
-```
-
-### 2. Dar permisos de ejecución
-
-Asegúrate de otorgarle permisos de ejecución al archivo:
-
-```bash
-chmod +x upd-agy-ide
-```
-
-### 3. Ejecutar el script
-
-Ejecuta el script con `sudo`:
-
-```bash
-sudo ./upd-agy-ide
+sudo upd-agy-ide
 ```
 
 Si deseas que además busque e instale/migre tus extensiones de VS Code hacia Antigravity IDE, agrega el flag `--with-extensions`:
 
 ```bash
-sudo ./upd-agy-ide --with-extensions
-```
-
-> **Nota**: El script requiere privilegios `root` para instalar los binarios en `/opt`, configurar enlaces en `/usr/local/bin` y generar los accesos directos del sistema.
-
-### 4. (Opcional) Hacer el comando global en el sistema
-
-Para poder actualizar Antigravity IDE en cualquier momento desde cualquier carpeta de tu terminal:
-
-```bash
-sudo cp upd-agy-ide /usr/local/bin/upd-agy-ide
-```
-
-A partir de ese momento, solo necesitarás ejecutar:
-
-```bash
-sudo upd-agy-ide
-# o incluyendo la migración de extensiones de VS Code:
 sudo upd-agy-ide --with-extensions
 ```
+
+> **Nota**: El script requiere privilegios `root` (`sudo`) para instalar los binarios en `/opt`, configurar enlaces en `/usr/local/bin` y generar los accesos directos del sistema.
 
 ---
 
@@ -113,7 +92,7 @@ Una vez completada la instalación, el comando `agy-ide` funcionará exactamente
 
 ## 🔄 Funcionamiento interno de las actualizaciones
 
-- Al volver a ejecutar `sudo ./upd-agy-ide`:
+- Al volver a ejecutar `sudo upd-agy-ide`:
   1. Si detecta el script antiguo en `/usr/local/bin/update-antigravity-ide`, migra hacia `/usr/local/bin/upd-agy-ide` (si aún no existe) y elimina automáticamente el binario obsoleto.
   2. Consulta la API de versiones oficiales de Antigravity IDE y detecta si ya existe una versión previa instalada en `/opt/antigravity-ide` (reportando la versión instalada actual y la nueva disponible).
   3. Si la versión instalada es idéntica a la última disponible, el script informará que ya está actualizado, limpiará cualquier respaldo `.previous` remanente y no descargará nada nuevamente.
