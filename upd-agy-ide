@@ -3,19 +3,24 @@
 set -euo pipefail
 
 with_extensions=no
+vscode_marketplace=no
 
 for arg in "$@"; do
 	case "$arg" in
 	--with-extensions)
 		with_extensions=yes
 		;;
+	--vscode-marketplace | --marketplace)
+		vscode_marketplace=yes
+		;;
 	-h | --help)
-		printf 'Uso: sudo %s [--with-extensions]\n' "$(basename "$0")"
-		printf '  --with-extensions  Busca e instala/migra las extensiones de VS Code hacia Antigravity IDE\n'
+		printf 'Uso: sudo %s [--vscode-marketplace] [--with-extensions]\n' "$(basename "$0")"
+		printf '  --vscode-marketplace  Configura el Marketplace de VS Code en settings.json de Antigravity IDE (si no existe)\n'
+		printf '  --with-extensions     Busca e instala/migra las extensiones compatibles de VS Code hacia Antigravity IDE\n'
 		exit 0
 		;;
 	*)
-		printf 'Opción no reconocida: %s\nUso: sudo %s [--with-extensions]\n' "$arg" "$(basename "$0")" >&2
+		printf 'Opción no reconocida: %s\nUso: sudo %s [--vscode-marketplace] [--with-extensions]\n' "$arg" "$(basename "$0")" >&2
 		exit 1
 		;;
 	esac
@@ -306,7 +311,7 @@ if [ "$installed_version" = "$version" ] &&
 	[ "$sandbox_ok" = yes ]; then
 	remove_previous_backup
 	printf 'Antigravity IDE %s is already installed at %s (versión más reciente)\n' "$version" "$install_path"
-	if [ "$with_extensions" = no ]; then
+	if [ "$with_extensions" = no ] && [ "$vscode_marketplace" = no ]; then
 		exit 0
 	fi
 	already_up_to_date=yes
@@ -509,6 +514,65 @@ fi
 printf 'Configured alias "agy-ide" for %s in %s\n' "$detected_shell" "$config_file"
 
 # -------------------------------------------------------------
+# Configuración del Marketplace de VS Code (--vscode-marketplace)
+# -------------------------------------------------------------
+if [ "$vscode_marketplace" = yes ]; then
+	agy_settings_dir="$target_home/.config/Antigravity IDE/User"
+	agy_settings_file="$agy_settings_dir/settings.json"
+	mkdir -p "$agy_settings_dir"
+
+	python3 - "$agy_settings_file" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+settings_path = Path(sys.argv[1])
+ITEM_KEY = "antigravity.marketplaceGalleryItemURL"
+ITEM_VAL = "https://marketplace.visualstudio.com/items"
+SERVICE_KEY = "antigravity.marketplaceExtensionGalleryServiceURL"
+SERVICE_VAL = "https://marketplace.visualstudio.com/_apis/public/gallery"
+
+data = {}
+if settings_path.is_file():
+    raw = settings_path.read_text(encoding="utf-8", errors="replace").strip()
+    if raw:
+        try:
+            data = json.loads(raw)
+        except Exception:
+            # Soportar JSON con comentarios o trailing commas básicos (JSONC)
+            cleaned = re.sub(r"//.*?$", "", raw, flags=re.MULTILINE)
+            cleaned = re.sub(r",\s*([}\]])", r"\1", cleaned)
+            try:
+                data = json.loads(cleaned)
+            except Exception as e:
+                print(f"No se pudo parsear {settings_path} ({e}); se omite modificación para no sobrescribir ajustes.", file=sys.stderr)
+                sys.exit(0)
+
+if not isinstance(data, dict):
+    data = {}
+
+changed = False
+if ITEM_KEY not in data:
+    data[ITEM_KEY] = ITEM_VAL
+    changed = True
+if SERVICE_KEY not in data:
+    data[SERVICE_KEY] = SERVICE_VAL
+    changed = True
+
+if changed:
+    settings_path.write_text(json.dumps(data, indent=4, ensure_ascii=False) + "\n", encoding="utf-8")
+    print(f"Marketplace de VS Code configurado en: {settings_path}")
+else:
+    print(f"El Marketplace de VS Code ya estaba configurado en: {settings_path}")
+PY
+
+	if [ -n "${SUDO_USER:-}" ] && [ "$target_user" != "root" ] && [ -d "$target_home/.config/Antigravity IDE" ]; then
+		chown -R "$target_user:$target_group" "$target_home/.config/Antigravity IDE"
+	fi
+fi
+
+# -------------------------------------------------------------
 # Migración de extensiones desde VS Code (--with-extensions)
 # -------------------------------------------------------------
 if [ "$with_extensions" = yes ]; then
@@ -532,8 +596,9 @@ if [ "$with_extensions" = yes ]; then
 		agy_ext_dir="$target_home/.antigravity-ide/extensions"
 		mkdir -p "$agy_ext_dir"
 
-		python3 - "$vscode_ext_dir" "$agy_ext_dir" "$cli_binary" "$code_bin" "$target_user" "$target_home" <<'PY'
+		python3 - "$vscode_ext_dir" "$agy_ext_dir" "$cli_binary" "$code_bin" "$target_user" "$target_home" "$install_path" <<'PY'
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -545,9 +610,89 @@ cli_bin = sys.argv[3]
 code_bin = sys.argv[4]
 target_user = sys.argv[5]
 target_home = sys.argv[6]
+install_path = Path(sys.argv[7])
 
-# Extensiones propias de VS Code que no aplican o ya vienen integradas en Antigravity IDE
-SKIP_EXTENSIONS = {"google.google-antigravity"}
+# Extensiones incompatibles o bloqueadas en Antigravity IDE (incluye blacklistedExtensionIds oficial,
+# Live Share, Remote propietarios de MS, otros agentes IA en conflicto y la extensión de Antigravity para VS Code)
+INCOMPATIBLE_EXTENSIONS = {
+    "google.google-antigravity",
+    "ms-vsliveshare.vsliveshare",
+    "ms-vsliveshare.vsliveshare-pack",
+    "ms-vsliveshare.vsliveshare-audio",
+    "ms-vscode-remote.remote-ssh",
+    "ms-vscode-remote.remote-ssh-edit",
+    "ms-vscode-remote.remote-ssh-editor",
+    "ms-vscode-remote.remote-wsl",
+    "ms-vscode-remote.remote-containers",
+    "ms-vscode-remote.vscode-remote-extensionpack",
+    "ms-vscode.remote-server",
+    "ms-vscode.remote-explorer",
+    "ms-python.vscode-pylance",
+    "visualstudioexptteam.vscodeintellicode",
+    "visualstudioexptteam.intellicode-api-usage-examples",
+    "ms-dotnettools.csdevkit",
+    "ms-dotnettools.vscodeintellicode-csharp",
+    "github.copilot",
+    "github.copilot-chat",
+    "github.codespaces",
+    "codeium.codeium",
+    "codeium.codeium-enterprise",
+    "codeium.codeium-enterprise-updater",
+    "sourcegraph.cody-ai",
+    "tabnine.tabnine-vscode",
+    "amazonwebservices.amazon-q-vscode",
+    "amazonwebservices.codewhisperer-for-command-line-companion",
+    "supermaven.supermaven",
+    "continue.continue",
+    "jeanp413.open-remote-ssh",
+    "miguelsolorio.symbols",
+    "robbowen.synthwave-vscode",
+    "enkia.tokyo-night",
+}
+
+# Extraer dinámicamente blacklistedExtensionIds desde el binario instalado de Antigravity IDE
+workbench_js = install_path / "resources/app/out/vs/workbench/workbench.desktop.main.js"
+if workbench_js.is_file():
+    try:
+        content = workbench_js.read_text(encoding="utf-8", errors="replace")
+        m = re.search(r"blacklistedExtensionIds:\[([^\]]+)\]", content)
+        if m:
+            for item in re.findall(r'"([^"]+)"', m.group(1)):
+                INCOMPATIBLE_EXTENSIONS.add(item.lower())
+    except Exception:
+        pass
+
+# Obtener la versión base del motor VS Code que soporta esta versión de Antigravity IDE
+agy_vscode_engine = (0, 0, 0)
+product_file = install_path / "resources/app/product.json"
+if product_file.is_file():
+    try:
+        prod = json.loads(product_file.read_text(encoding="utf-8", errors="replace"))
+        ver_str = prod.get("version", "")
+        nums = [int(x) for x in re.findall(r"\d+", ver_str)[:3]]
+        if nums:
+            agy_vscode_engine = tuple(nums + [0] * (3 - len(nums)))
+    except Exception:
+        pass
+
+
+def is_engine_compatible(ext_folder: Path) -> bool:
+    if not ext_folder or not ext_folder.is_dir() or agy_vscode_engine == (0, 0, 0):
+        return True
+    pkg = ext_folder / "package.json"
+    if not pkg.is_file():
+        return True
+    try:
+        meta = json.loads(pkg.read_text(encoding="utf-8", errors="replace"))
+        req = (meta.get("engines") or {}).get("vscode", "")
+        m = re.search(r"(\d+)\.(\d+)(?:\.(\d+))?", str(req))
+        if m:
+            req_ver = (int(m.group(1)), int(m.group(2)), int(m.group(3) or 0))
+            if req_ver > agy_vscode_engine:
+                return False
+    except Exception:
+        pass
+    return True
 
 
 def run_as_user(args: list):
@@ -608,43 +753,64 @@ if not vscode_ids:
 agy_entries = load_extensions_json(agy_dir)
 agy_ids = collect_installed_ids(agy_dir, agy_entries)
 
-missing_ids = sorted(ext_id for ext_id in vscode_ids if ext_id not in agy_ids and ext_id not in SKIP_EXTENSIONS)
-if not missing_ids:
-    print("VS Code detectado: todas las extensiones compatibles ya están en Antigravity IDE.")
-    sys.exit(0)
-
-print(f"VS Code detectado: migrando {len(missing_ids)} extensión(es) hacia Antigravity IDE...")
-
 entry_by_id = {}
 for item in vscode_entries:
     ext_id = ((item.get("identifier") or {}).get("id") or "").lower()
     if ext_id:
         entry_by_id[ext_id] = item
 
+
+def find_vscode_ext_folder(ext_id: str):
+    src_entry = entry_by_id.get(ext_id)
+    if src_entry and vscode_dir:
+        rel = src_entry.get("relativeLocation")
+        if rel and (vscode_dir / rel).is_dir():
+            return vscode_dir / rel
+    if vscode_dir and vscode_dir.is_dir():
+        matches = sorted(vscode_dir.glob(f"{ext_id}-*"))
+        for m in reversed(matches):
+            if m.is_dir():
+                return m
+    return None
+
+
+candidates = sorted(ext_id for ext_id in vscode_ids if ext_id not in agy_ids)
+skipped_incompatible = []
+missing_ids = []
+
+for ext_id in candidates:
+    folder = find_vscode_ext_folder(ext_id)
+    if ext_id in INCOMPATIBLE_EXTENSIONS or not is_engine_compatible(folder):
+        skipped_incompatible.append(ext_id)
+    else:
+        missing_ids.append(ext_id)
+
+for ext_id in skipped_incompatible:
+    print(f"  ⏭ Omitida (no compatible con Antigravity IDE): {ext_id}")
+
+if not missing_ids:
+    print("VS Code detectado: todas las extensiones compatibles ya están en Antigravity IDE.")
+    sys.exit(0)
+
+print(f"VS Code detectado: migrando {len(missing_ids)} extensión(es) compatible(s) hacia Antigravity IDE...")
+
 migrated_count = 0
 
 for ext_id in missing_ids:
     # 1. Intentar instalar desde la galería mediante el CLI de Antigravity IDE
     res = run_as_user([cli_bin, "--install-extension", ext_id])
+    out_lower = ((res.stdout or "") + "\n" + (res.stderr or "")).lower()
     if res.returncode == 0:
         print(f"  ✓ Instalada vía CLI: {ext_id}")
         migrated_count += 1
         continue
+    if "not compatible" in out_lower or "incompatible" in out_lower or "cannot be installed" in out_lower or "disallow" in out_lower:
+        print(f"  ⏭ Omitida (rechazada por incompatibilidad): {ext_id}")
+        continue
 
-    # 2. Respaldo: copia directa de la carpeta desde ~/.vscode/extensions si no está en Open VSX
-    src_folder = None
+    # 2. Respaldo: copia directa de la carpeta desde ~/.vscode/extensions si es compatible pero no está en Open VSX
+    src_folder = find_vscode_ext_folder(ext_id)
     src_entry = entry_by_id.get(ext_id)
-    if src_entry and vscode_dir:
-        rel = src_entry.get("relativeLocation")
-        if rel and (vscode_dir / rel).is_dir():
-            src_folder = vscode_dir / rel
-
-    if not src_folder and vscode_dir and vscode_dir.is_dir():
-        matches = sorted(vscode_dir.glob(f"{ext_id}-*"))
-        for m in reversed(matches):
-            if m.is_dir():
-                src_folder = m
-                break
 
     if src_folder and src_folder.is_dir():
         dest_folder = agy_dir / src_folder.name

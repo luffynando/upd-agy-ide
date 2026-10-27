@@ -19,9 +19,12 @@ Script automatizado en Bash para instalar, actualizar y configurar **Antigravity
 - **Comando CLI y Alias `agy-ide` (idéntico a `code`)**:
   - Vincula el ejecutable CLI `/usr/local/bin/agy-ide` al lanzador interno (`bin/antigravity-ide`).
   - Detecta el shell del usuario (**Bash**, **Zsh** o **Fish**) e inyecta de manera limpia e idempotente el alias `agy-ide` en `~/.bashrc`, `~/.zshrc` o `~/.config/fish/config.fish`, preservando la propiedad y permisos del usuario real (no de root).
-- **Migración opcional de extensiones desde VS Code (`--with-extensions`)**:
+- **Configuración opcional del Marketplace de VS Code (`--vscode-marketplace`)**:
+  - Al pasar el flag `--vscode-marketplace` (o `--marketplace`), inyecta en `~/.config/Antigravity IDE/User/settings.json` (si no existen ya) las URLs del Marketplace oficial de Visual Studio Code (`antigravity.marketplaceGalleryItemURL` y `antigravity.marketplaceExtensionGalleryServiceURL`) en lugar de Open VSX.
+- **Migración opcional de extensiones compatibles desde VS Code (`--with-extensions`)**:
   - Al pasar el flag `--with-extensions`, si detecta Visual Studio Code instalado (vía APT, Snap o Flatpak) o el directorio `~/.vscode/extensions`, compara las extensiones instaladas con las de Antigravity IDE (`~/.antigravity-ide/extensions`).
-  - Migra las extensiones faltantes instalándolas mediante el CLI de Antigravity IDE (con respaldo de copia directa desde `~/.vscode/extensions` si alguna extensión no está en Open VSX). Si no se pasa el flag, no realiza búsqueda ni instalación de extensiones.
+  - Omite automáticamente todas las extensiones incompatibles o bloqueadas por Antigravity IDE (por ejemplo, `ms-vsliveshare.vsliveshare`, extensiones Remote propietarias de Microsoft, Copilot/Codeium/otros agentes en conflicto, o extensiones que requieran una versión superior del motor VS Code).
+  - Migra únicamente las extensiones compatibles mediante el CLI de Antigravity IDE (con respaldo de copia local desde `~/.vscode/extensions`). Si no se pasa el flag, no realiza búsqueda ni instalación de extensiones.
 
 ---
 
@@ -61,10 +64,17 @@ Una vez instalado el comando global, puedes ejecutarlo desde cualquier carpeta d
 sudo upd-agy-ide
 ```
 
-Si deseas que además busque e instale/migre tus extensiones de VS Code hacia Antigravity IDE, agrega el flag `--with-extensions`:
+Si deseas configurar el Marketplace de VS Code en `settings.json` (en lugar de Open VSX) y/o migrar tus extensiones compatibles desde VS Code, puedes usar las siguientes flags:
 
 ```bash
+# Configurar el Marketplace oficial de VS Code en settings.json (si no existe):
+sudo upd-agy-ide --vscode-marketplace
+
+# Buscar y migrar únicamente las extensiones compatibles desde VS Code:
 sudo upd-agy-ide --with-extensions
+
+# Ejecutar ambas opciones en un solo paso:
+sudo upd-agy-ide --vscode-marketplace --with-extensions
 ```
 
 > **Nota**: El script requiere privilegios `root` (`sudo`) para instalar los binarios en `/opt`, configurar enlaces en `/usr/local/bin` y generar los accesos directos del sistema.
