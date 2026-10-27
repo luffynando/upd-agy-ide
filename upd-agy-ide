@@ -10,6 +10,8 @@ download_page="https://antigravity.google/releases"
 fallback_api_url="https://antigravity-ide-auto-updater-974169037036.us-central1.run.app/releases"
 install_root="/opt/antigravity-ide"
 command_link="/usr/local/bin/antigravity-ide"
+updater_bin="/usr/local/bin/upd-agy-ide"
+legacy_updater_bin="/usr/local/bin/update-antigravity-ide"
 desktop_file="/usr/share/applications/antigravity-ide.desktop"
 icon_file="/usr/share/icons/hicolor/512x512/apps/antigravity-ide.png"
 apparmor_file="/etc/apparmor.d/antigravity-ide"
@@ -98,6 +100,18 @@ if [ "${#missing_cmds[@]}" -gt 0 ]; then
 		echo "Missing required commands: ${missing_cmds[*]}" >&2
 		exit 1
 	fi
+fi
+
+# Si existe el binario/script antiguo en /usr/local/bin/update-antigravity-ide,
+# aseguramos que el nuevo esté instalado en /usr/local/bin/upd-agy-ide y eliminamos el viejo.
+script_self=$(readlink -f "$0" 2>/dev/null || echo "$0")
+if [ -e "$legacy_updater_bin" ] || [ -L "$legacy_updater_bin" ]; then
+	if [ ! -e "$updater_bin" ] && [ -f "$script_self" ]; then
+		install -m 0755 "$script_self" "$updater_bin"
+		printf 'Script de actualización migrado: %s -> %s\n' "$legacy_updater_bin" "$updater_bin"
+	fi
+	rm -f "$legacy_updater_bin"
+	printf 'Script obsoleto detectado y eliminado: %s\n' "$legacy_updater_bin"
 fi
 
 if [ -L "$command_link" ]; then
@@ -211,7 +225,19 @@ resolved_install_root=$(readlink -f "$install_root" || echo "$install_root")
 
 expected_target="$resolved_install_root/$install_dir/antigravity-ide"
 sandbox_path="$resolved_install_root/$install_dir/chrome-sandbox"
+product_json="$resolved_install_root/$install_dir/resources/app/product.json"
 installed_version=$(cat "$resolved_install_root/.linuxcapable-version" 2>/dev/null || true)
+
+# Fallback: si no existe .linuxcapable-version pero la instalación ya está en disco, leemos ideVersion de product.json
+if [ -z "$installed_version" ] && [ -f "$product_json" ]; then
+	installed_version=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("ideVersion", ""))' "$product_json" 2>/dev/null || true)
+fi
+
+is_update=no
+if [ -n "$installed_version" ] || [ -x "$expected_target" ] || [ -d "$resolved_install_root/$install_dir" ]; then
+	is_update=yes
+fi
+
 desktop_matches=no
 apparmor_matches=yes
 
@@ -228,17 +254,36 @@ if [ "$needs_apparmor" = yes ]; then
 	fi
 fi
 
+# Si quedaron respaldos previos (.previous) de ejecuciones anteriores, los limpiamos
+if [ -d "${install_root}.previous" ] && [ -x "$expected_target" ]; then
+	rm -rf "${install_root}.previous"
+	printf 'Respaldo previo eliminado automáticamente: %s\n' "${install_root}.previous"
+fi
+
 if [ "$installed_version" = "$version" ] &&
 	[ -x "$expected_target" ] &&
 	[ -L "$command_link" ] &&
 	[ "$(readlink -f "$command_link")" = "$expected_target" ] &&
+	[ -L /usr/local/bin/agy-ide ] &&
 	[ "$desktop_matches" = yes ] &&
 	[ "$apparmor_matches" = yes ] &&
 	[ -f "$icon_file" ]; then
 	if [ ! -e "$sandbox_path" ] || [ "$(stat -c '%U:%G:%a' "$sandbox_path")" = "root:root:4755" ]; then
-		printf 'Antigravity IDE %s is already installed at %s\n' "$version" "$resolved_install_root/$install_dir"
+		printf 'Instalación existente detectada: Antigravity IDE %s en %s\n' "$installed_version" "$resolved_install_root/$install_dir"
+		printf 'Antigravity IDE %s ya se encuentra en la versión más reciente.\n' "$version"
 		exit 0
 	fi
+fi
+
+if [ "$is_update" = yes ]; then
+	printf 'Instalación existente detectada: Antigravity IDE %s en %s\n' "${installed_version:-versión previa}" "$resolved_install_root/$install_dir"
+	if [ "$installed_version" = "$version" ]; then
+		printf 'Verificando y reparando componentes de Antigravity IDE %s...\n' "$version"
+	else
+		printf 'Nueva versión disponible: %s. Se actualizará Antigravity IDE (%s -> %s)...\n' "$version" "${installed_version:-versión previa}" "$version"
+	fi
+else
+	printf 'No se detectó instalación previa. Se instalará Antigravity IDE %s en %s...\n' "$version" "$resolved_install_root/$install_dir"
 fi
 
 printf 'Downloading Antigravity IDE %s for %s...\n' "$version" "$platform"
@@ -341,6 +386,12 @@ real_binary="$resolved_install_root/$install_dir/antigravity-ide"
 
 ln -sfn "$real_binary" "$command_link"
 
+# Una vez instalada exitosamente la nueva versión, autoeliminamos el respaldo previo (.previous)
+if [ -x "$real_binary" ] && [ -d "${install_root}.previous" ]; then
+	rm -rf "${install_root}.previous"
+	printf 'Respaldo previo eliminado automáticamente: %s\n' "${install_root}.previous"
+fi
+
 # Configuración de AppArmor si aplica (Ubuntu 24.04, Ubuntu 26.04 o Debian con restricción de userns)
 if [ "$needs_apparmor" = yes ]; then
 	abi_directive=""
@@ -392,7 +443,11 @@ if command -v gtk-update-icon-cache >/dev/null 2>&1; then
 	gtk-update-icon-cache -q /usr/share/icons/hicolor 2>/dev/null || true
 fi
 
-printf 'Installed Antigravity IDE %s at %s\n' "$version" "$resolved_install_root/$install_dir"
+if [ "$is_update" = yes ]; then
+	printf 'Updated Antigravity IDE (%s -> %s) at %s\n' "${installed_version:-previous}" "$version" "$resolved_install_root/$install_dir"
+else
+	printf 'Installed Antigravity IDE %s at %s\n' "$version" "$resolved_install_root/$install_dir"
+fi
 
 # Configuración del CLI y alias 'agy-ide' según el tipo de shell (bash | zsh | fish)
 cli_binary="$resolved_install_root/$install_dir/bin/antigravity-ide"

@@ -88,6 +88,7 @@ Una vez completada la instalación, el comando `agy-ide` funcionará exactamente
 ## 🔄 Funcionamiento interno de las actualizaciones
 
 - Al volver a ejecutar `sudo ./upd-agy-ide`:
-  1. Consulta la API de versiones oficiales de Antigravity IDE.
-  2. Si la versión instalada es idéntica a la última disponible, el script informará que ya está actualizado y no descargará nada nuevamente.
-  3. Si hay una nueva versión disponible, descargará el tarball correspondiente, reemplazará la versión previa (manteniendo un respaldo seguro temporal) y actualizará el CLI y accesos directos.
+  1. Si detecta el script antiguo en `/usr/local/bin/update-antigravity-ide`, migra hacia `/usr/local/bin/upd-agy-ide` (si aún no existe) y elimina automáticamente el binario obsoleto.
+  2. Consulta la API de versiones oficiales de Antigravity IDE y detecta si ya existe una versión previa instalada en `/opt/antigravity-ide` (reportando la versión instalada actual y la nueva disponible).
+  3. Si la versión instalada es idéntica a la última disponible, el script informará que ya está actualizado, limpiará cualquier respaldo `.previous` remanente y no descargará nada nuevamente.
+  4. Si hay una nueva versión disponible, notificará la actualización (`versión_actual -> nueva_versión`), descargará el tarball correspondiente, reemplazará la versión previa y autoeliminará el respaldo temporal (`.previous`) una vez completada exitosamente la instalación.
